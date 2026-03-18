@@ -1,11 +1,42 @@
 #!/usr/bin/env python3
-"""金蝶元数据分析器 - 解析 dym/dymx 文件"""
+"""金蝶元数据分析器 - 支持 ZIP 包解压和 dym/dymx 文件解析"""
 import os
 import sys
+import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import datetime
 import json
+import tempfile
+import shutil
+
+def extract_zip(zip_path, extract_to):
+    """解压 ZIP 文件，返回解压后的目录路径"""
+    print(f"[解压] 正在解压: {zip_path}")
+    
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(extract_to)
+    
+    print(f"[解压] 已解压到: {extract_to}")
+    return extract_to
+
+def find_dym_files(directory, extensions=['.dym', '.dymx']):
+    """递归查找目录下所有 dym/dymx 文件"""
+    dym_files = []
+    
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            if any(file.lower().endswith(ext) for ext in extensions):
+                full_path = os.path.join(root, file)
+                rel_path = os.path.relpath(full_path, directory)
+                dym_files.append({
+                    'full_path': full_path,
+                    'rel_path': rel_path,
+                    'name': file,
+                    'size': os.path.getsize(full_path)
+                })
+    
+    return dym_files
 
 def parse_xml_file(file_path):
     """解析 XML 文件，处理命名空间"""
@@ -105,11 +136,9 @@ def analyze_design_meta(element):
     # 解析 DataXml
     data_xml = element.find('DataXml')
     if data_xml is not None:
-        # 处理嵌套的 XML
         data_str = ET.tostring(data_xml, encoding='unicode')
         result["DataXml预览"] = data_str[:500] + "..." if len(data_str) > 500 else data_str
         
-        # 递归提取表单/实体元数据
         for child in data_xml:
             if 'Meta' in child.tag:
                 result["子元数据类型"] = child.tag
@@ -126,14 +155,12 @@ def extract_js_plugins(element):
     """提取 JS 插件列表"""
     plugins = []
     
-    # 查找所有 JsPlugins/Plugin 路径
     for plugin in element.iter('Plugin'):
         plugin_info = {}
         for child in plugin:
             plugin_info[child.tag] = child.text if child.text else ""
         
         if plugin_info:
-            # 格式化启用状态
             if plugin_info.get('Enabled') == 'true':
                 plugin_info["状态"] = "启用"
             else:
@@ -166,13 +193,11 @@ def analyze_extension_metadata(root):
         "扩展内容": []
     }
     
-    # 基本属性
     for attr in ['Id', 'Number', 'TargetId', 'TargetNumber', 'Version']:
         elem = root.find(attr)
         if elem is not None and elem.text:
             result["基本属性"][attr] = elem.text
     
-    # 扩展内容
     extensions = root.find('Extensions')
     if extensions is not None:
         for ext in extensions:
@@ -184,84 +209,77 @@ def analyze_extension_metadata(root):
     
     return result
 
-def generate_report(file_path, analysis_result):
-    """生成分析报告"""
+def generate_single_report(file_path, analysis_result):
+    """生成单个文件的分析报告"""
     report = []
-    report.append("=" * 60)
-    report.append("金蝶元数据分析报告")
-    report.append("=" * 60)
-    report.append("")
-    report.append(f"[文件] {file_path}")
-    report.append(f"[时间] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    report.append("")
     
-    # 基本属性
+    report.append("-" * 50)
+    report.append(f"[文件] {file_path}")
+    report.append("-" * 50)
+    
     if "基本属性" in analysis_result:
-        report.append("[基本信息]")
-        report.append("-" * 40)
         for k, v in analysis_result["基本属性"].items():
             report.append(f"  {k}: {v}")
-        report.append("")
     
-    # 版本信息
     if "版本信息" in analysis_result:
-        report.append("[版本信息]")
-        report.append("-" * 40)
         for k, v in analysis_result["版本信息"].items():
             report.append(f"  {k}: {v}")
-        report.append("")
     
-    # 设计元数据
-    if "设计元数据" in analysis_result and analysis_result["设计元数据"]:
-        report.append("[设计元数据]")
-        report.append("-" * 40)
-        for i, meta in enumerate(analysis_result["设计元数据"], 1):
-            report.append(f"\n  [{i}] {meta.get('类型', 'Unknown')}")
-            report.append(f"      编号: {meta.get('编号', 'N/A')}")
-            report.append(f"      模型类型: {meta.get('模型类型说明', meta.get('模型类型', 'N/A'))}")
-            report.append(f"      ISV: {meta.get('ISV', 'N/A')}")
-            report.append(f"      开发类型: {meta.get('DevType说明', meta.get('DevType', 'N/A'))}")
-            
-            if meta.get('继承路径'):
-                path_parts = meta['继承路径'].split(',')
-                report.append(f"      继承层级: {len(path_parts)} 级")
-            
-            # JS 插件
-            if meta.get('JS插件'):
-                report.append(f"      JS插件: {len(meta['JS插件'])} 个")
-                for plugin in meta['JS插件']:
-                    status = plugin.get('状态', '')
-                    report.append(f"        - {plugin.get('ClassName', 'N/A')} ({status})")
-            
-            # 字段配置
-            if meta.get('字段配置'):
-                report.append(f"      列表字段: {len(meta['字段配置'])} 个")
-                for col in meta['字段配置'][:3]:
-                    report.append(f"        - {col.get('显示名称', 'N/A')} ({col.get('字段ID', 'N/A')})")
-                if len(meta['字段配置']) > 3:
-                    report.append(f"        ... 还有 {len(meta['字段配置']) - 3} 个字段")
-        
-        report.append("")
-    
-    # 插件汇总
-    all_plugins = []
     if "设计元数据" in analysis_result:
         for meta in analysis_result["设计元数据"]:
-            all_plugins.extend(meta.get('JS插件', []))
+            report.append(f"  类型: {meta.get('类型', 'N/A')}")
+            report.append(f"  ISV: {meta.get('ISV', 'N/A')}")
+            report.append(f"  开发类型: {meta.get('DevType说明', meta.get('DevType', 'N/A'))}")
+            
+            plugins = meta.get('JS插件', [])
+            if plugins:
+                report.append(f"  JS插件: {len(plugins)} 个")
+                for p in plugins[:2]:
+                    report.append(f"    - {p.get('ClassName', 'N/A')}")
+                if len(plugins) > 2:
+                    report.append(f"    ... 还有 {len(plugins)-2} 个")
     
-    if all_plugins:
-        report.append("[JS 插件汇总]")
-        report.append("-" * 40)
-        for i, plugin in enumerate(all_plugins, 1):
-            report.append(f"  [{i}] {plugin.get('ClassName', 'N/A')}")
-            report.append(f"      标识: {plugin.get('FPK', 'N/A')}")
-            report.append(f"      用途: {plugin.get('SourceName', 'N/A')}")
-            report.append(f"      状态: {plugin.get('状态', 'N/A')}")
-        report.append("")
+    return "\n".join(report)
+
+def generate_summary_report(zip_path, dym_files, results):
+    """生成汇总报告"""
+    report = []
+    report.append("=" * 70)
+    report.append("金蝶元数据分析报告 - 批量分析")
+    report.append("=" * 70)
+    report.append("")
+    report.append(f"[ZIP文件] {zip_path}")
+    report.append(f"[分析时间] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    report.append("")
+    report.append(f"[找到文件] 共发现 {len(dym_files)} 个 dym/dymx 文件")
+    report.append("")
     
-    report.append("=" * 60)
+    for i, (dym_info, result) in enumerate(zip(dym_files, results), 1):
+        report.append(f"\n[{i}/{len(dym_files)}] {dym_info['name']}")
+        report.append("-" * 50)
+        report.append(f"  路径: {dym_info['rel_path']}")
+        report.append(f"  大小: {dym_info['size']:,} 字节")
+        
+        if result.get('基本属性'):
+            for k, v in result['基本属性'].items():
+                if k in ['Id', 'BizappId', 'MasterId']:
+                    report.append(f"  {k}: {v}")
+        
+        if result.get('版本信息', {}).get('可读时间'):
+            report.append(f"  修改时间: {result['版本信息']['可读时间']}")
+        
+        plugins = []
+        if '设计元数据' in result:
+            for meta in result['设计元数据']:
+                plugins.extend(meta.get('JS插件', []))
+        
+        if plugins:
+            report.append(f"  JS插件: {len(plugins)} 个")
+    
+    report.append("")
+    report.append("=" * 70)
     report.append("分析完成")
-    report.append("=" * 60)
+    report.append("=" * 70)
     
     return "\n".join(report)
 
@@ -271,7 +289,12 @@ def main():
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     
     if len(sys.argv) < 2:
-        print("用法: python kingdee_metadata.py <dym或dymx文件路径>")
+        print("用法: python kingdee_metadata.py <文件路径>")
+        print("")
+        print("支持的文件格式:")
+        print("  - .dym 文件（金蝶部署元数据）")
+        print("  - .dymx 文件（金蝶扩展元数据）")
+        print("  - .zip 文件（金蝶部署包，自动解压并分析）")
         sys.exit(1)
     
     file_path = sys.argv[1]
@@ -281,39 +304,90 @@ def main():
         sys.exit(1)
     
     file_ext = os.path.splitext(file_path)[1].lower()
-    if file_ext not in ['.dym', '.dymx']:
-        print(f"错误: 不支持的文件类型 - {file_ext}")
-        print("仅支持 .dym 和 .dymx 文件")
-        sys.exit(1)
     
-    print(f"正在分析: {file_path}")
-    print("")
+    # 创建临时目录用于解压
+    temp_dir = tempfile.mkdtemp(prefix="kddp_analysis_")
     
     try:
-        root, content = parse_xml_file(file_path)
+        # 处理 ZIP 文件
+        if file_ext == '.zip':
+            print(f"\n[检测] 这是一个 ZIP 压缩包，将自动解压分析")
+            print("=" * 50)
+            
+            # 解压
+            extract_zip(file_path, temp_dir)
+            
+            # 查找 dym/dymx 文件
+            print("\n[扫描] 正在搜索 dym/dymx 文件...")
+            dym_files = find_dym_files(temp_dir)
+            
+            if not dym_files:
+                print("错误: 在 ZIP 包中未找到任何 .dym 或 .dymx 文件")
+                sys.exit(1)
+            
+            print(f"[发现] 找到 {len(dym_files)} 个文件:")
+            for d in dym_files:
+                print(f"  - {d['rel_path']} ({d['size']:,} 字节)")
+            
+            print("\n" + "=" * 50)
+            print("开始分析...")
+            print("=" * 50)
+            
+            # 分析每个文件
+            results = []
+            for dym_info in dym_files:
+                print(f"\n分析: {dym_info['name']}")
+                try:
+                    root, content = parse_xml_file(dym_info['full_path'])
+                    
+                    if root.tag == 'DeployMetadata':
+                        result = analyze_deploy_metadata(root)
+                    elif root.tag == 'ExtensionMetadata':
+                        result = analyze_extension_metadata(root)
+                    else:
+                        print(f"  未知类型: {root.tag}")
+                        result = {"错误": f"未知类型: {root.tag}"}
+                    
+                    results.append(result)
+                    print(f"  OK")
+                    
+                except Exception as e:
+                    print(f"  解析失败: {str(e)}")
+                    results.append({"错误": str(e)})
+            
+            # 生成汇总报告
+            print("\n" + "=" * 50)
+            report = generate_summary_report(file_path, dym_files, results)
+            print(report)
         
-        # 根据根元素判断元数据类型
-        if root.tag == 'DeployMetadata':
-            result = analyze_deploy_metadata(root)
-        elif root.tag == 'ExtensionMetadata':
-            result = analyze_extension_metadata(root)
+        # 处理单个 dym/dymx 文件
+        elif file_ext in ['.dym', '.dymx']:
+            print(f"正在分析: {file_path}")
+            print("")
+            
+            root, content = parse_xml_file(file_path)
+            
+            if root.tag == 'DeployMetadata':
+                result = analyze_deploy_metadata(root)
+            elif root.tag == 'ExtensionMetadata':
+                result = analyze_extension_metadata(root)
+            else:
+                print(f"未知元数据类型: {root.tag}")
+                sys.exit(1)
+            
+            report = generate_single_report(file_path, result)
+            print(report)
+        
         else:
-            print(f"未知元数据类型: {root.tag}")
+            print(f"错误: 不支持的文件类型 - {file_ext}")
+            print("仅支持 .dym, .dymx 和 .zip 文件")
             sys.exit(1)
-        
-        # 生成报告
-        report = generate_report(file_path, result)
-        print(report)
-        
-        # 输出 JSON 格式（供程序调用）
-        # print("\n--- JSON 输出 ---")
-        # print(json.dumps(result, ensure_ascii=False, indent=2))
-        
-    except Exception as e:
-        print(f"解析错误: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    
+    finally:
+        # 清理临时目录
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+            print(f"\n[清理] 已删除临时目录")
 
 if __name__ == "__main__":
     main()
