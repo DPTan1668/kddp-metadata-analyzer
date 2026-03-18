@@ -10,7 +10,7 @@ metadata:
     emoji: "📊"
 ---
 
-# 金蝶元数据分析器 (Kingdee Metadata Analyzer)
+# 金蝶元数据分析器 (Kddp Metadata Analyzer)
 
 ## 功能概述
 
