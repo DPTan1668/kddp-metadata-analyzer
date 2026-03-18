@@ -1,7 +1,7 @@
 ---
-name: kingdee-metadata-analyzer
+name: kddp-metadata-analyzer
 description: |
-  分析金蝶云苍穹/星瀚平台的元数据文件（.dym、.dymx 和 .zip）。
+  分析金蝶云EBC产品的元数据文件（.dym、.dymx）。
   支持解析部署元数据、表单元数据、实体元数据、插件配置、继承关系等。
   支持 ZIP 压缩包自动解压，找出其中的所有 dym/dymx 文件并批量分析。
   适用于金蝶开发人员、实施顾问进行元数据审查、问题排查和文档生成。
@@ -16,8 +16,8 @@ metadata:
 
 本 Skill 用于分析金蝶云苍穹/星瀚平台的元数据文件：
 
-- **.dym** 文件 - 部署元数据（Deploy Metadata）
-- **.dymx** 文件 - 扩展元数据（Extension Metadata）
+- **.dym** 文件 - 部署元数据（Deploy）
+- **.dymx** 文件 - 扩展元数据（Extension Language）
 - **.zip** 文件 - 金蝶部署包，自动解压并分析其中的所有 dym/dymx 文件
 
 ## 使用场景
@@ -91,8 +91,8 @@ metadata:
 
 直接告诉我要分析的金蝶元数据文件路径：
 
-> "分析 C:\\Users\\kingdee\\Desktop\\xxx.dym"
-> "帮我看看这个 dymx 文件"
+> "分析 C:\\Users\\kingdee\\Desktop\\xxx.zip"
+> "帮我看看这个 dym、dymx 文件"
 
 ### 分析 ZIP 压缩包
 
